@@ -4,10 +4,16 @@ using Unity.Mathematics;
 using Unity.Physics;
 using Unity.Physics.Systems;
 using Unity.Transforms;
+using UnityEngine;
+using Debug = UnityEngine.Debug;
+using RaycastHit = Unity.Physics.RaycastHit;
 
 [UpdateInGroup(typeof(AfterPhysicsSystemGroup))]
 public partial struct StaticCastSystem : ISystem
 {
+    private int _frame;
+    private int _fixed;
+
     public void OnCreate (ref SystemState state)
     {
         state.RequireForUpdate<PhysicsWorldSingleton>();
@@ -21,6 +27,41 @@ public partial struct StaticCastSystem : ISystem
 
         // Try to await ExportPhysicsWorld, but it doesn't help either
         state.Dependency.Complete();
+
+        // FixedStep during frame Counter
+        if (_frame < Time.frameCount)
+        {
+            _frame = Time.frameCount;
+            _fixed = default;
+        }
+        _fixed++;
+
+        // I add this after daniel-holz suggestion, doesn't help
+        {
+            // Retrieve the LocalToWorldSystem from the World
+            var localToWorldSystem = state.World.GetOrCreateSystem<LocalToWorldSystem>();
+
+            // Call Update on the system
+            localToWorldSystem.Update(state.World.Unmanaged);
+
+            // Wait LocalToWorldSystem to complete
+            state.Dependency.Complete();
+        }
+
+        // I add this after daniel-holz suggestion, doesn't help
+        {
+            var localTransformLookup = SystemAPI.GetComponentLookup<LocalTransform>();
+            var parentLookup = SystemAPI.GetComponentLookup<Parent>();
+            var scaleLookup = SystemAPI.GetComponentLookup<PostTransformMatrix>();
+
+            foreach (var (localToWorld, entity) in SystemAPI.Query<RefRW<LocalToWorld>>().WithEntityAccess())
+            {
+                TransformHelpers.ComputeWorldTransformMatrix(
+                    entity, out var worldMatrix,
+                    ref localTransformLookup, ref parentLookup, ref scaleLookup);
+                localToWorld.ValueRW.Value = worldMatrix;
+            }
+        }
 
         // Try to manually sync CollisionWorld, but it doesn't help either
         ref var physicsWorld = ref SystemAPI.GetSingletonRW<PhysicsWorldSingleton>().ValueRW;
@@ -53,13 +94,13 @@ public partial struct StaticCastSystem : ISystem
                     // Distance from cube (according to entity LocalTransform) to hit.Position,
                     // After the first shift with long ray hit.Position will remain in the old coords
                     var distance = math.distance(worldMatrix.Translation(), hit.Position);
-                    UnityEngine.Debug.Log($"StaticCast: {name}, cube2hit dist = {distance:F3}m, hit pos = {hit.Position}");
+                    Debug.Log($"FixedStep#{_fixed}: {name}, cube2hit dist = {distance:F3}m, hit pos = {hit.Position}");
                 }
             }
             // After first shift during same frame we will start miss raycast, if it is short enough
             else
             {
-                UnityEngine.Debug.Log($"StaticCast: NO HIT, ray start = {worldMatrix.TransformPoint(staticCast.RayStartLocal)}");
+                Debug.Log($"FixedStep#{_fixed}: NO HIT, ray start = {worldMatrix.TransformPoint(staticCast.RayStartLocal)}");
             }
         }
 
